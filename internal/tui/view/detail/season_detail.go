@@ -114,6 +114,10 @@ func (v *SeasonDetailView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd := v.DetailBase.Update(msg)
 	cmds = append(cmds, cmd)
 
+	var listCmd tea.Cmd
+	v.episodeList, listCmd = v.episodeList.Update(msg)
+	cmds = append(cmds, listCmd)
+
 	v.episodeList.SetSize(ui.GetLayout().InnerWidth()-4, ui.GetLayout().ContentHeight()/2)
 
 	return v, tea.Batch(cmds...)
