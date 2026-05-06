@@ -25,6 +25,7 @@ type PlayerManager struct {
 	status     PlayerStatus
 	stopChan   chan struct{}
 	updates    chan tea.Msg
+	queue      []QueueItem
 }
 
 var (
@@ -77,14 +78,28 @@ func (pm *PlayerManager) Status() PlayerStatus {
 }
 
 func (pm *PlayerManager) Play(url, title, ratingKey string, noReport bool, tctMode bool, startOffset int64, subtitles []ExternalSubtitle) tea.Cmd {
+	return pm.PlayQueue([]QueueItem{{
+		URL:       url,
+		Title:     title,
+		RatingKey: ratingKey,
+		NoReport:  noReport,
+		Subtitles: subtitles,
+	}}, tctMode, startOffset)
+}
+
+func (pm *PlayerManager) PlayQueue(items []QueueItem, tctMode bool, startOffset int64) tea.Cmd {
 	return func() tea.Msg {
-		slog.Debug("PlayerManager.Play start", "title", title, "rk", ratingKey, "tct", tctMode, "offset", startOffset)
+		if len(items) == 0 {
+			return fmt.Errorf("empty play queue")
+		}
+		first := items[0]
+		slog.Debug("PlayerManager.PlayQueue start", "count", len(items), "first", first.Title, "tct", tctMode, "offset", startOffset)
+
 		if err := pm.ensureMpv(); err != nil {
 			slog.Error("PlayerManager: mpv check failed", "error", err)
 			return err
 		}
 
-		// Strictly validate existing connection
 		if pm.conn != nil && !pm.VerifyConnection() {
 			slog.Debug("PlayerManager: cleaning up non-responsive connection")
 			pm.cleanup()
@@ -95,7 +110,7 @@ func (pm *PlayerManager) Play(url, title, ratingKey string, noReport bool, tctMo
 				slog.Debug("PlayerManager: Mode changed, restarting mpv", "old", pm.status.TctMode, "new", tctMode)
 				pm.conn.Call("quit")
 				pm.cleanup()
-			} else if pm.status.Key != "" && pm.status.Key != ratingKey {
+			} else if pm.status.Key != "" && pm.status.Key != first.RatingKey {
 				slog.Debug("PlayerManager: different media, reporting progress first")
 				pm.reportProgressWithKey()
 			}
@@ -130,41 +145,90 @@ func (pm *PlayerManager) Play(url, title, ratingKey string, noReport bool, tctMo
 			}
 		}
 
+		pm.queue = items
+
 		pm.status = PlayerStatus{
-			Title:    title,
-			File:     url,
-			Key:      ratingKey,
-			NoReport: noReport,
+			Title:    first.Title,
+			File:     first.URL,
+			Key:      first.RatingKey,
+			NoReport: first.NoReport,
 			TctMode:  tctMode,
 			Time:     float64(startOffset) / 1000.0,
 		}
 		pm.status.Play()
 
 		startSec := float64(startOffset) / 1000.0
-		slog.Debug("PlayerManager: sending loadfile to mpv", "url", url, "startSec", startSec)
+		slog.Debug("PlayerManager: sending loadfile to mpv", "url", first.URL, "startSec", startSec)
 
-		pm.conn.Call("loadfile", url, "replace", "-1", fmt.Sprintf("start=%.3f", startSec))
-		pm.conn.Call("set_property", "pause", false)
-		pm.conn.Call("set_property", "force-media-title", title)
-		pm.conn.Call("set_property", "user-data/plex-rating-key", ratingKey)
-		pm.conn.Call("set_property", "user-data/plex-title", title)
-		pm.conn.Call("set_property", "user-data/plex-no-report", noReport)
-		pm.conn.Call("show-text", "PlexCTL: Loading "+title+"...", 5000)
-
-		for _, sub := range subtitles {
-			if _, err := pm.conn.Call("sub-add", sub.URL, "auto", sub.Title, sub.Language); err != nil {
-				slog.Warn("Failed to add subtitle track", "title", sub.Title, "error", err)
-			} else {
-				slog.Debug("Added external subtitle", "title", sub.Title, "lang", sub.Language)
-			}
+		pm.conn.Call("loadfile", first.URL, "replace", "-1", fmt.Sprintf("start=%.3f", startSec))
+		for _, item := range items[1:] {
+			pm.conn.Call("loadfile", item.URL, "append")
 		}
 
-		slog.Debug("PlayerManager: playback initiated")
+		pm.applyMpvStateForItem(first)
+		pm.conn.Call("show-text", "PlexCTL: Loading "+first.Title+"...", 5000)
+		pm.addSubtitles(first.Subtitles)
+
+		slog.Debug("PlayerManager: playback initiated", "queue_len", len(items))
 		pm.reportProgressWithKey()
 		pm.sendUpdate()
 
 		return PlayerStatusMsg{}
 	}
+}
+
+func (pm *PlayerManager) applyMpvStateForItem(item QueueItem) {
+	if pm.conn == nil {
+		return
+	}
+	pm.conn.Call("set_property", "pause", false)
+	pm.conn.Call("set_property", "force-media-title", item.Title)
+	pm.conn.Call("set_property", "user-data/plex-rating-key", item.RatingKey)
+	pm.conn.Call("set_property", "user-data/plex-title", item.Title)
+	pm.conn.Call("set_property", "user-data/plex-no-report", item.NoReport)
+}
+
+func (pm *PlayerManager) addSubtitles(subs []ExternalSubtitle) {
+	if pm.conn == nil {
+		return
+	}
+	for _, sub := range subs {
+		if _, err := pm.conn.Call("sub-add", sub.URL, "auto", sub.Title, sub.Language); err != nil {
+			slog.Warn("Failed to add subtitle track", "title", sub.Title, "error", err)
+		} else {
+			slog.Debug("Added external subtitle", "title", sub.Title, "lang", sub.Language)
+		}
+	}
+}
+
+func (pm *PlayerManager) onFileLoaded() {
+	if pm.conn == nil || len(pm.queue) <= 1 {
+		return
+	}
+	posVal, err := pm.conn.Call("get_property", "playlist-pos")
+	if err != nil || posVal == nil {
+		return
+	}
+	posF, ok := posVal.(float64)
+	if !ok {
+		return
+	}
+	idx := int(posF)
+	if idx < 0 || idx >= len(pm.queue) {
+		return
+	}
+	item := pm.queue[idx]
+	if item.RatingKey == pm.status.Key {
+		return
+	}
+	slog.Debug("PlayerManager: queue advanced", "idx", idx, "title", item.Title)
+	pm.status.Title = item.Title
+	pm.status.Key = item.RatingKey
+	pm.status.NoReport = item.NoReport
+	pm.status.Time = 0
+	pm.applyMpvStateForItem(item)
+	pm.addSubtitles(item.Subtitles)
+	pm.sendUpdate()
 }
 
 func (pm *PlayerManager) Reconnect() tea.Cmd {
@@ -373,8 +437,13 @@ func (pm *PlayerManager) monitorEvents() {
 			}
 			if ev.Name == "end-file" {
 				slog.Debug("PlayerManager: playback finished (end-file)")
-				pm.status.State = operations.StateStopped
 				pm.reportProgressWithKey()
+				if len(pm.queue) <= 1 {
+					pm.status.State = operations.StateStopped
+				}
+			}
+			if ev.Name == "file-loaded" {
+				pm.onFileLoaded()
 			}
 			if ev.Name == "property-change" {
 				slog.Log(context.Background(), config.LevelTrace, "PlayerManager: property change", "id", ev.ID, "data", ev.Data)
@@ -480,6 +549,7 @@ func (pm *PlayerManager) cleanup() {
 		pm.conn = nil
 	}
 	pm.status = PlayerStatus{}
+	pm.queue = nil
 	if runtime.GOOS != "windows" {
 		os.Remove(pm.socketPath)
 	}

@@ -108,6 +108,14 @@ func (v *SeasonDetailView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+		case "P":
+			keys := v.collectQueueFromSelected()
+			if len(keys) == 0 {
+				return v, nil
+			}
+			return v, func() tea.Msg {
+				return ui.RequestPlayQueueMsg{RatingKeys: keys}
+			}
 		}
 	}
 
@@ -127,12 +135,30 @@ func (v *SeasonDetailView) IsAtRoot() bool {
 	return v.selectedEpisode == nil
 }
 
+func (v *SeasonDetailView) collectQueueFromSelected() []string {
+	if len(v.children) == 0 {
+		return nil
+	}
+	startIdx := v.episodeList.Index()
+	if startIdx < 0 || startIdx >= len(v.children) {
+		return nil
+	}
+	keys := make([]string, 0, len(v.children)-startIdx)
+	for _, child := range v.children[startIdx:] {
+		if child.RatingKey != nil {
+			keys = append(keys, *child.RatingKey)
+		}
+	}
+	return keys
+}
+
 func (v *SeasonDetailView) HelpKeys() []ui.HelpKey {
 	if v.selectedEpisode != nil {
 		return v.selectedEpisode.HelpKeys()
 	}
 	return []ui.HelpKey{
 		{Key: "enter", Desc: "View Episode Details"},
+		{Key: "P", Desc: "Play All from Selected"},
 		{Key: "S", Desc: "Go to Show"},
 		{Key: "esc", Desc: "Back"},
 		{Key: "j/up", Desc: "Move Up / Scroll"},
@@ -179,5 +205,5 @@ func (v *SeasonDetailView) View() string {
 		Render(v.episodeList.View())
 
 	return lipgloss.NewStyle().Padding(1, 2).Render(lipgloss.JoinVertical(lipgloss.Left, mainLayout, listContent)) +
-		"\n\n " + lipgloss.NewStyle().Foreground(v.Theme.BrightBlack()).Render("[enter] Details | [p] Play | [S] Show | [esc] Back")
+		"\n\n " + lipgloss.NewStyle().Foreground(v.Theme.BrightBlack()).Render("[enter] Details | [p] Play | [P] Play All | [S] Show | [esc] Back")
 }
