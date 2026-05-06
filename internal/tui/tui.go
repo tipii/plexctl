@@ -187,6 +187,8 @@ func (c *Controller) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ui.RequestPlayMsg:
 		return c, player.FetchAndPlay(msg.RatingKey, msg.TctMode)
+	case ui.RequestPlayQueueMsg:
+		return c, player.FetchAndPlayQueue(msg.RatingKeys, msg.TctMode)
 	case ui.ResumeChoiceMsg:
 		return c, c.navigator.Push(resume.NewResumeOverlayModel(msg.Metadata, msg.TctMode, c.theme))
 	case ui.SelectMediaMsg:
@@ -538,7 +540,7 @@ func (c *Controller) renderBaseView() string {
 		Background(c.theme.BrightBlack()).
 		Foreground(c.theme.White()).
 		Padding(0, 1).
-		Render(" q: quit | tab: switch lib | h: home | ctrl+s: settings | ctrl+l: libs | u: user | p: play | x: stop ")
+		Render(" q: quit | tab: switch lib | h: home | ctrl+s: settings | ctrl+l: libs | u: user | p: play | P: play all | x: stop ")
 
 	return lipgloss.JoinVertical(lipgloss.Left, mainArea, footer)
 }

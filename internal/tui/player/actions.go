@@ -65,6 +65,93 @@ func PlayMedia(metadata *components.Metadata, noReport bool, tctMode bool, start
 	return GetPlayerManager().Play(playURL, title, rk, noReport, tctMode, startOffset, subtitles)
 }
 
+// buildQueueItem turns a fully-fetched metadata into a QueueItem with subtitle URLs.
+func buildQueueItem(metadata *components.Metadata, noReport bool) (QueueItem, error) {
+	if metadata == nil || len(metadata.Media) == 0 || len(metadata.Media[0].Part) == 0 {
+		return QueueItem{}, fmt.Errorf("no playable media for %q", metadata.Title)
+	}
+	cfg := config.Get()
+	_, serverCfg, ok := cfg.GetActiveServer()
+	if !ok {
+		return QueueItem{}, fmt.Errorf("no active server")
+	}
+
+	part := metadata.Media[0].Part[0]
+	separator := "?"
+	if strings.Contains(part.Key, "?") {
+		separator = "&"
+	}
+	playURL := fmt.Sprintf("%s%s%sX-Plex-Token=%s", serverCfg.URL, part.Key, separator, cfg.Token)
+
+	var subtitles []ExternalSubtitle
+	for _, stream := range part.Stream {
+		if stream.StreamType == components.StreamTypeSubtitle && stream.Key != "" {
+			sep := "?"
+			if strings.Contains(stream.Key, "?") {
+				sep = "&"
+			}
+			subURL := fmt.Sprintf("%s%s%sX-Plex-Token=%s", serverCfg.URL, stream.Key, sep, cfg.Token)
+			lang := ""
+			if stream.LanguageCode != nil {
+				lang = *stream.LanguageCode
+			}
+			subtitles = append(subtitles, ExternalSubtitle{
+				URL:      subURL,
+				Title:    stream.DisplayTitle,
+				Language: lang,
+			})
+		}
+	}
+
+	rk := ""
+	if metadata.RatingKey != nil {
+		rk = *metadata.RatingKey
+	}
+
+	return QueueItem{
+		URL:       playURL,
+		Title:     metadata.Title,
+		RatingKey: rk,
+		NoReport:  noReport,
+		Subtitles: subtitles,
+	}, nil
+}
+
+// FetchAndPlayQueue fetches full metadata for each rating key and plays them as a queue.
+func FetchAndPlayQueue(ratingKeys []string, tctMode bool) tea.Cmd {
+	return func() tea.Msg {
+		if len(ratingKeys) == 0 {
+			return fmt.Errorf("no items to play")
+		}
+
+		var items []QueueItem
+		for _, rk := range ratingKeys {
+			meta, err := plex.GetMetadata(context.Background(), rk, true)
+			if err != nil {
+				slog.Warn("FetchAndPlayQueue: failed to fetch metadata", "ratingKey", rk, "error", err)
+				continue
+			}
+			item, err := buildQueueItem(meta, false)
+			if err != nil {
+				slog.Warn("FetchAndPlayQueue: skipping unplayable item", "ratingKey", rk, "error", err)
+				continue
+			}
+			items = append(items, item)
+		}
+
+		if len(items) == 0 {
+			return fmt.Errorf("no playable items in queue")
+		}
+
+		slog.Debug("FetchAndPlayQueue: dispatching queue", "count", len(items))
+		cmd := GetPlayerManager().PlayQueue(items, tctMode, 0)
+		if cmd != nil {
+			return cmd()
+		}
+		return nil
+	}
+}
+
 // FetchAndPlay handles the full playback logic: fetch full metadata, check for resume, then play
 func FetchAndPlay(ratingKey string, tctMode bool) tea.Cmd {
 	return func() tea.Msg {

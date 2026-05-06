@@ -72,6 +72,11 @@ type RequestPlayMsg struct {
 	TctMode   bool
 }
 
+type RequestPlayQueueMsg struct {
+	RatingKeys []string
+	TctMode    bool
+}
+
 type ResumeChoiceMsg struct {
 	Metadata *components.Metadata
 	TctMode  bool

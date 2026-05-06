@@ -19,6 +19,14 @@ type ExternalSubtitle struct {
 	Language string
 }
 
+type QueueItem struct {
+	URL       string
+	Title     string
+	RatingKey string
+	NoReport  bool
+	Subtitles []ExternalSubtitle
+}
+
 type (
 	PlayerStatusMsg       struct{}
 	PlayerStatusMsgPoller struct{}
