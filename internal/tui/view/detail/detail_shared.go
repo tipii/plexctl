@@ -18,8 +18,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	tint "github.com/lrstanley/bubbletint"
-	gopixels "github.com/saran13raj/go-pixels"
 	"github.com/ygelfand/plexctl/internal/plex"
+	"github.com/ygelfand/plexctl/internal/tui/widget/poster"
 	"github.com/ygelfand/plexctl/internal/ui"
 )
 
@@ -66,11 +66,16 @@ func fetchPoster(metadata *components.Metadata, width int) tea.Cmd {
 
 		slog.Debug("fetchPoster start", "title", metadata.Title, "ratingKey", rk, "width", targetWidth)
 
-		// Check long-term cache for rendered string
+		// Check long-term cache for rendered string (halfcell only)
 		if rk != "" {
-			if cached, ok := plex.GetCachedPoster(rk, targetWidth); ok {
+			if cached, ok := poster.TryCachedPosterStr(rk, targetWidth); ok {
 				return posterDataMsg(cached)
 			}
+		}
+
+		proto := poster.ResolveProtocol()
+		if proto == poster.ProtocolOff {
+			return nil
 		}
 
 		start := time.Now()
@@ -88,7 +93,20 @@ func fetchPoster(metadata *components.Metadata, width int) tea.Cmd {
 			return nil
 		}
 
-		imgStr, err := gopixels.FromImageStream(img, targetWidth, 0, "halfcell", true)
+		// Aspect-correct row count for the detail poster (Kitty needs explicit
+		// rows; halfcell auto-computes height so the value is ignored there).
+		bounds := img.Bounds()
+		imgW, imgH := bounds.Dx(), bounds.Dy()
+		rows := targetWidth
+		if imgW > 0 {
+			// Terminal cells are ~2x taller than wide, so halve the y scale.
+			rows = (targetWidth*imgH + imgW) / (imgW * 2)
+		}
+		if rows < 1 {
+			rows = 1
+		}
+
+		imgStr, err := poster.RenderPoster(img, targetWidth, rows, rk, proto)
 		if err != nil {
 			slog.Error("fetchPoster render failed", "error", err)
 			return nil
@@ -97,7 +115,7 @@ func fetchPoster(metadata *components.Metadata, width int) tea.Cmd {
 
 		// Save to long-term cache
 		if rk != "" {
-			plex.SetCachedPoster(rk, targetWidth, imgStr)
+			poster.CachePosterStr(rk, targetWidth, imgStr)
 		}
 
 		return posterDataMsg(imgStr)

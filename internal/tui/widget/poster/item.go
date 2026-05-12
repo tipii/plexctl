@@ -14,7 +14,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	tint "github.com/lrstanley/bubbletint"
-	gopixels "github.com/saran13raj/go-pixels"
 	"github.com/ygelfand/plexctl/internal/plex"
 	"github.com/ygelfand/plexctl/internal/ui"
 )
@@ -44,7 +43,7 @@ func FetchPoster(listID int, index int, metadata components.Metadata) tea.Cmd {
 		}
 
 		if rk != "" {
-			if cached, ok := plex.GetCachedPoster(rk, ui.PosterWidth); ok {
+			if cached, ok := TryCachedPosterStr(rk, ui.PosterWidth); ok {
 				return PosterLoadedMsg{ListID: listID, Index: index, View: cached}
 			}
 		}
@@ -62,6 +61,11 @@ func FetchPoster(listID int, index int, metadata components.Metadata) tea.Cmd {
 			return nil
 		}
 
+		proto := ResolveProtocol()
+		if proto == ProtocolOff {
+			return nil
+		}
+
 		data, err := plex.GetImage(context.Background(), path)
 		if err != nil {
 			return nil
@@ -72,13 +76,13 @@ func FetchPoster(listID int, index int, metadata components.Metadata) tea.Cmd {
 			return nil
 		}
 
-		imgStr, err := gopixels.FromImageStream(img, ui.PosterWidth, 0, "halfcell", true)
+		imgStr, err := RenderPoster(img, ui.PosterWidth, ui.PosterHeight, rk, proto)
 		if err != nil {
 			return nil
 		}
 
 		if rk != "" {
-			plex.SetCachedPoster(rk, ui.PosterWidth, imgStr)
+			CachePosterStr(rk, ui.PosterWidth, imgStr)
 		}
 
 		return PosterLoadedMsg{ListID: listID, Index: index, View: imgStr}
