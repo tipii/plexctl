@@ -53,6 +53,41 @@ func SetCachedPoster(ratingKey string, width int, view string) {
 	_ = cm.Set(key, view, PosterCacheTTL)
 }
 
+type cachedKittyPNG struct {
+	Rows int    `json:"rows"`
+	PNG  []byte `json:"png"`
+}
+
+// GetCachedKittyPNG returns the cached downscaled PNG for (ratingKey, cols)
+// and the row count used when it was encoded, or ok=false on miss.
+func GetCachedKittyPNG(ratingKey string, cols int) (data []byte, rows int, ok bool) {
+	key := fmt.Sprintf("kitty_png/%s/%d", ratingKey, cols)
+	cfg := config.Get()
+	cm, err := cache.Get(cfg.CacheDir)
+	if err != nil {
+		return nil, 0, false
+	}
+	var result cachedKittyPNG
+	if err := cm.Get(key, &result); err == nil {
+		slog.Debug("Kitty PNG Cache HIT", "ratingKey", ratingKey, "cols", cols, "rows", result.Rows)
+		return result.PNG, result.Rows, true
+	}
+	slog.Debug("Kitty PNG Cache MISS", "ratingKey", ratingKey, "cols", cols)
+	return nil, 0, false
+}
+
+// SetCachedKittyPNG persists the downscaled PNG used for Kitty transmission.
+func SetCachedKittyPNG(ratingKey string, cols, rows int, data []byte) {
+	cfg := config.Get()
+	cm, err := cache.Get(cfg.CacheDir)
+	if err != nil {
+		return
+	}
+	slog.Debug("Kitty PNG Cache SAVE", "ratingKey", ratingKey, "cols", cols, "rows", rows, "bytes", len(data))
+	key := fmt.Sprintf("kitty_png/%s/%d", ratingKey, cols)
+	_ = cm.Set(key, cachedKittyPNG{Rows: rows, PNG: data}, PosterCacheTTL)
+}
+
 // GetMetadata retrieves full metadata for an item by its rating key. If force is true, cache is bypassed.
 func GetMetadata(ctx context.Context, ratingKey string, force bool) (*components.Metadata, error) {
 	cfg := config.Get()

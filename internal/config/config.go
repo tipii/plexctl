@@ -60,6 +60,15 @@ const (
 	ViewModePoster ViewMode = "poster"
 )
 
+type ImageProtocol string
+
+const (
+	ImageProtocolAuto     ImageProtocol = "auto"
+	ImageProtocolHalfcell ImageProtocol = "halfcell"
+	ImageProtocolKitty    ImageProtocol = "kitty"
+	ImageProtocolOff      ImageProtocol = "off"
+)
+
 type LibraryOptions struct {
 	IconEmoji string   `mapstructure:"icon_emoji" yaml:"icon_emoji"`
 	IconNF    string   `mapstructure:"icon_nf" yaml:"icon_nf"`
@@ -108,6 +117,7 @@ type Config struct {
 	IconType          IconType          `mapstructure:"icon_type"`           // ascii, emoji, nerdfonts
 	LibraryNameFormat LibraryNameFormat `mapstructure:"library_name_format"` // icon_only, icon_name, name_icon, name
 	DefaultViewMode   ViewMode          `mapstructure:"default_view_mode"`   // list, poster
+	ImageProtocol     ImageProtocol     `mapstructure:"image_protocol"`      // auto, halfcell, kitty, off
 	CacheDir          string            `mapstructure:"cache_dir"`
 	NoCache           bool              `mapstructure:"no_cache"`
 	DefaultToTui      bool              `mapstructure:"default_to_tui"`
@@ -211,6 +221,7 @@ func (c *Config) Save() error {
 	viper.Set("icon_type", c.IconType)
 	viper.Set("library_name_format", c.LibraryNameFormat)
 	viper.Set("default_view_mode", c.DefaultViewMode)
+	viper.Set("image_protocol", c.ImageProtocol)
 	viper.Set("default_to_tui", c.DefaultToTui)
 	viper.Set("auto_home_login", c.AutoHomeLogin)
 	viper.Set("close_video_on_quit", c.CloseVideoOnQuit)

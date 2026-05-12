@@ -18,8 +18,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	tint "github.com/lrstanley/bubbletint"
-	gopixels "github.com/saran13raj/go-pixels"
 	"github.com/ygelfand/plexctl/internal/plex"
+	"github.com/ygelfand/plexctl/internal/tui/widget/poster"
 	"github.com/ygelfand/plexctl/internal/ui"
 )
 
@@ -66,9 +66,14 @@ func fetchPoster(metadata *components.Metadata, width int) tea.Cmd {
 
 		slog.Debug("fetchPoster start", "title", metadata.Title, "ratingKey", rk, "width", targetWidth)
 
-		// Check long-term cache for rendered string
+		proto := poster.ResolveProtocol()
+		if proto == poster.ProtocolOff {
+			return nil
+		}
+
+		// Fast path: rendered representation already on disk.
 		if rk != "" {
-			if cached, ok := plex.GetCachedPoster(rk, targetWidth); ok {
+			if cached, ok := poster.RenderPosterCached(rk, targetWidth, proto); ok {
 				return posterDataMsg(cached)
 			}
 		}
@@ -88,16 +93,30 @@ func fetchPoster(metadata *components.Metadata, width int) tea.Cmd {
 			return nil
 		}
 
-		imgStr, err := gopixels.FromImageStream(img, targetWidth, 0, "halfcell", true)
+		// Aspect-correct row count for the detail poster (Kitty needs explicit
+		// rows; halfcell auto-computes height so the value is ignored there).
+		bounds := img.Bounds()
+		imgW, imgH := bounds.Dx(), bounds.Dy()
+		rows := targetWidth
+		if imgW > 0 {
+			// Terminal cells are ~2x taller than wide, so halve the y scale.
+			rows = (targetWidth*imgH + imgW) / (imgW * 2)
+		}
+		if rows < 1 {
+			rows = 1
+		}
+
+		imgStr, err := poster.RenderPoster(img, targetWidth, rows, rk, proto)
 		if err != nil {
 			slog.Error("fetchPoster render failed", "error", err)
 			return nil
 		}
 		slog.Debug("fetchPoster render complete", "duration", time.Since(start))
 
-		// Save to long-term cache
-		if rk != "" {
-			plex.SetCachedPoster(rk, targetWidth, imgStr)
+		// Halfcell caches the rendered string; Kitty already persisted the PNG
+		// inside RenderPoster.
+		if rk != "" && proto == poster.ProtocolHalfcell {
+			poster.CachePosterStr(rk, targetWidth, imgStr)
 		}
 
 		return posterDataMsg(imgStr)
