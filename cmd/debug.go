@@ -63,7 +63,7 @@ var debugPosterCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Fprint(os.Stdout, out)
+		fmt.Fprint(os.Stdout, poster.WrapTmuxPassthrough(out))
 		fmt.Fprintln(os.Stdout)
 		return nil
 	}),

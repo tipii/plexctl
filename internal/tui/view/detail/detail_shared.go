@@ -66,16 +66,16 @@ func fetchPoster(metadata *components.Metadata, width int) tea.Cmd {
 
 		slog.Debug("fetchPoster start", "title", metadata.Title, "ratingKey", rk, "width", targetWidth)
 
-		// Check long-term cache for rendered string (halfcell only)
-		if rk != "" {
-			if cached, ok := poster.TryCachedPosterStr(rk, targetWidth); ok {
-				return posterDataMsg(cached)
-			}
-		}
-
 		proto := poster.ResolveProtocol()
 		if proto == poster.ProtocolOff {
 			return nil
+		}
+
+		// Fast path: rendered representation already on disk.
+		if rk != "" {
+			if cached, ok := poster.RenderPosterCached(rk, targetWidth, proto); ok {
+				return posterDataMsg(cached)
+			}
 		}
 
 		start := time.Now()
@@ -113,8 +113,9 @@ func fetchPoster(metadata *components.Metadata, width int) tea.Cmd {
 		}
 		slog.Debug("fetchPoster render complete", "duration", time.Since(start))
 
-		// Save to long-term cache
-		if rk != "" {
+		// Halfcell caches the rendered string; Kitty already persisted the PNG
+		// inside RenderPoster.
+		if rk != "" && proto == poster.ProtocolHalfcell {
 			poster.CachePosterStr(rk, targetWidth, imgStr)
 		}
 

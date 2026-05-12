@@ -7,11 +7,38 @@ import (
 	"hash/fnv"
 	"image"
 	"image/png"
+	"os"
 	"strings"
 	"sync"
 
 	"golang.org/x/image/draw"
 )
+
+// WrapTmuxPassthrough wraps a control sequence in tmux's DCS passthrough
+// envelope when $TMUX is set, doubling every ESC inside the payload as the
+// tmux protocol requires. Returns s unchanged outside tmux.
+//
+// The host tmux session needs `set -g allow-passthrough on` for the wrapped
+// sequence to reach the outer terminal.
+func WrapTmuxPassthrough(s string) string {
+	if os.Getenv("TMUX") == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s)*2 + 16)
+	b.WriteString("\x1bPtmux;")
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == 0x1b {
+			b.WriteByte(0x1b)
+			b.WriteByte(0x1b)
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	b.WriteString("\x1b\\")
+	return b.String()
+}
 
 // kittyPixelPerCellX, kittyPixelPerCellY are conservative pixel-per-cell
 // estimates for downscaling. The Kitty terminal will resample anyway, so
@@ -99,12 +126,29 @@ func EncodeKittyInline(img image.Image, cols, rows int) (string, error) {
 // Emit this once per (id, image content). Kitty stores images by id; repeat
 // transmits are harmless but waste bandwidth.
 func TransmitKitty(img image.Image, cols, rows int, id uint32) (string, error) {
+	pngBytes, err := EncodeKittyPNG(img, cols, rows)
+	if err != nil {
+		return "", err
+	}
+	return TransmitKittyFromPNG(pngBytes, cols, rows, id), nil
+}
+
+// EncodeKittyPNG downscales img to the target cell footprint and returns the
+// PNG bytes that would be sent to the terminal. Callers can persist these
+// bytes to skip the resize+encode work on later transmits.
+func EncodeKittyPNG(img image.Image, cols, rows int) ([]byte, error) {
 	scaled := downscaleForKitty(img, cols, rows)
 	var pngBuf bytes.Buffer
 	if err := png.Encode(&pngBuf, scaled); err != nil {
-		return "", fmt.Errorf("png encode: %w", err)
+		return nil, fmt.Errorf("png encode: %w", err)
 	}
-	b64 := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
+	return pngBuf.Bytes(), nil
+}
+
+// TransmitKittyFromPNG builds the Kitty graphics sequence from pre-encoded
+// PNG bytes. Mirrors TransmitKitty but skips the downscale + PNG encode.
+func TransmitKittyFromPNG(pngBytes []byte, cols, rows int, id uint32) string {
+	b64 := base64.StdEncoding.EncodeToString(pngBytes)
 
 	const chunkSize = 4096
 	var out strings.Builder
@@ -133,7 +177,7 @@ func TransmitKitty(img image.Image, cols, rows int, id uint32) (string, error) {
 		out.WriteString(chunk)
 		out.WriteString("\x1b\\")
 	}
-	return out.String(), nil
+	return out.String()
 }
 
 // KittyPlaceholderGrid returns a (cols × rows) block of Unicode placeholder

@@ -42,8 +42,14 @@ func FetchPoster(listID int, index int, metadata components.Metadata) tea.Cmd {
 			rk = *metadata.RatingKey
 		}
 
+		proto := ResolveProtocol()
+		if proto == ProtocolOff {
+			return nil
+		}
+
+		// Fast path: a previously rendered representation is on disk.
 		if rk != "" {
-			if cached, ok := TryCachedPosterStr(rk, ui.PosterWidth); ok {
+			if cached, ok := RenderPosterCached(rk, ui.PosterWidth, proto); ok {
 				return PosterLoadedMsg{ListID: listID, Index: index, View: cached}
 			}
 		}
@@ -58,11 +64,6 @@ func FetchPoster(listID int, index int, metadata components.Metadata) tea.Cmd {
 		}
 
 		if path == "" {
-			return nil
-		}
-
-		proto := ResolveProtocol()
-		if proto == ProtocolOff {
 			return nil
 		}
 
@@ -81,7 +82,9 @@ func FetchPoster(listID int, index int, metadata components.Metadata) tea.Cmd {
 			return nil
 		}
 
-		if rk != "" {
+		// Halfcell caches the rendered string; Kitty already persisted the PNG
+		// inside RenderPoster.
+		if rk != "" && proto == ProtocolHalfcell {
 			CachePosterStr(rk, ui.PosterWidth, imgStr)
 		}
 

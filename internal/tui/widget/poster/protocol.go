@@ -16,27 +16,55 @@ import (
 var kittyStdoutMu sync.Mutex
 
 // RenderPoster encodes a decoded image into the cell-grid string used by the
-// TUI. For Kitty, the image is transmitted to os.Stdout the first time we see
-// its id; the returned string is the placeholder grid that references it.
+// TUI. For Kitty, this also persists the downscaled PNG bytes to disk so
+// later renders can skip decode/resize/encode.
+//
 // For halfcell, returns the go-pixels output (rows is ignored; go-pixels
 // computes height from the image aspect ratio).
 func RenderPoster(img image.Image, cols, rows int, ratingKey string, proto Protocol) (string, error) {
 	switch proto {
 	case ProtocolKitty:
-		id := KittyImageID(ratingKey, cols, rows)
-		if MarkKittyTransmitted(id) {
-			seq, err := TransmitKitty(img, cols, rows, id)
-			if err != nil {
-				return "", err
-			}
-			kittyStdoutMu.Lock()
-			_, _ = os.Stdout.WriteString(seq)
-			kittyStdoutMu.Unlock()
+		pngBytes, err := EncodeKittyPNG(img, cols, rows)
+		if err != nil {
+			return "", err
 		}
-		return KittyPlaceholderGrid(id, cols, rows), nil
+		if ratingKey != "" {
+			plex.SetCachedKittyPNG(ratingKey, cols, rows, pngBytes)
+		}
+		return renderKittyFromPNG(pngBytes, ratingKey, cols, rows), nil
 	default:
 		return gopixels.FromImageStream(img, cols, 0, "halfcell", true)
 	}
+}
+
+// RenderPosterCached returns a renderable poster string from the disk cache
+// without touching the source image, or ok=false on miss. For Kitty, this
+// triggers a transmit if the image id hasn't been sent yet in this process.
+func RenderPosterCached(ratingKey string, cols int, proto Protocol) (string, bool) {
+	switch proto {
+	case ProtocolHalfcell:
+		return plex.GetCachedPoster(ratingKey, cols)
+	case ProtocolKitty:
+		pngBytes, rows, ok := plex.GetCachedKittyPNG(ratingKey, cols)
+		if !ok {
+			return "", false
+		}
+		return renderKittyFromPNG(pngBytes, ratingKey, cols, rows), true
+	}
+	return "", false
+}
+
+// renderKittyFromPNG handles the per-process transmit bookkeeping for an
+// already-encoded PNG and returns the placeholder grid that references it.
+func renderKittyFromPNG(pngBytes []byte, ratingKey string, cols, rows int) string {
+	id := KittyImageID(ratingKey, cols, rows)
+	if MarkKittyTransmitted(id) {
+		seq := TransmitKittyFromPNG(pngBytes, cols, rows, id)
+		kittyStdoutMu.Lock()
+		_, _ = os.Stdout.WriteString(WrapTmuxPassthrough(seq))
+		kittyStdoutMu.Unlock()
+	}
+	return KittyPlaceholderGrid(id, cols, rows)
 }
 
 // Protocol is the rendering strategy chosen for posters.
@@ -63,11 +91,6 @@ func ResolveProtocol() Protocol {
 	}
 
 	// auto / unset
-	if os.Getenv("TMUX") != "" {
-		// tmux strips the Kitty APC sequence unless passthrough is configured;
-		// we haven't shipped passthrough support yet.
-		return ProtocolHalfcell
-	}
 	if terminalSupportsKitty() {
 		return ProtocolKitty
 	}
